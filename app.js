@@ -17,6 +17,7 @@
   let selected = null;
   let myLoc = null;
   let syncing = false, syncState = 'idle';
+  let listFrom = null; // a pin to measure distances from ("what's around here")
   let placing = null; // {id} when moving an existing pin, {} when adding
 
   // A setup link (?sync=...) configures the shared sheet on a new phone.
@@ -128,7 +129,7 @@
     s.innerHTML = '<div class="grab"></div><button class="x" data-act="close" aria-label="Close">×</button>' + html;
     s.classList.add('open'); s.scrollTop = 0;
   }
-  function closeSheet() { $('#sheet').classList.remove('open'); $('#sheet').dataset.mode = ''; if (selected) { selected = null; render(); } }
+  function closeSheet() { listFrom = null; $('#sheet').classList.remove('open'); $('#sheet').dataset.mode = ''; if (selected) { selected = null; render(); } }
 
   const stars = (n) => (n ? '★'.repeat(n) + '☆'.repeat(5 - n) : '');
   const niceDate = (d) => { const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(d || ''); return m ? new Date(+m[1], +m[2] - 1, +m[3]).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' }) : (d || ''); };
@@ -155,6 +156,9 @@
       <div class="row">
         <a class="btn go" href="https://maps.apple.com/?daddr=${p.lat},${p.lng}&q=${encodeURIComponent(p.name)}" target="_blank" rel="noopener">Directions</a>
         <button class="btn" data-act="edit">Edit</button>
+      </div>
+      <div class="row">
+        <button class="btn" data-act="around">What's around here</button>
       </div>
       <div class="row">
         <button class="btn" data-act="move">Move pin</button>
@@ -185,20 +189,21 @@
   }
 
   function openList(q) {
-    let list = shown();
-    if (myLoc) list.forEach((p) => { p._d = distMi(myLoc, p); });
-    list.sort((a, b) => (myLoc ? a._d - b._d : a.name.localeCompare(b.name)));
+    const from = listFrom || myLoc;
+    let list = shown().filter((p) => !listFrom || p.id !== listFrom.id);
+    if (from) list.forEach((p) => { p._d = distMi(from, p); });
+    list.sort((a, b) => (from ? a._d - b._d : a.name.localeCompare(b.name)));
     openSheet('list', `
-      <h2>${filter === 'all' ? 'All spots' : esc(CAT[filter].label)} <small style="font:14px var(--sans);color:var(--soft)">${list.length}</small></h2>
+      <h2>${listFrom ? 'Around ' + esc(listFrom.name) : filter === 'all' ? 'All spots' : esc(CAT[filter].label)} <small style="font:14px var(--sans);color:var(--soft)">${list.length}</small></h2>
       <input id="l-q" type="search" placeholder="Search names and notes" value="${esc(q || '')}">
-      <p class="hint">${myLoc ? 'Closest first.' : 'Tap ◎ on the map to sort these by distance.'}</p>
+      <p class="hint">${listFrom ? 'Closest to this pin first' + (filter === 'all' ? '.' : ', ' + esc(CAT[filter].label) + ' only. Tap All up top for everything.') : myLoc ? 'Closest to you first.' : 'Tap ◎ on the map to sort these by distance.'}</p>
       <div id="l-items"></div>`);
     const draw = () => {
       const needle = $('#l-q').value.trim().toLowerCase();
       const rows = list.filter((p) => !needle || (p.name + ' ' + p.note).toLowerCase().includes(needle));
       $('#l-items').innerHTML = rows.map((p) => { const c = catOf(p);
         return `<button class="item" data-open="${esc(p.id)}"><span class="dot" style="--c:${c.color}">${c.icon}</span>
-          <span class="t"><div>${esc(p.name)}</div><small>${esc(c.label)}${p.rating ? ' · ' + stars(p.rating) : ''}${myLoc ? ' · ' + fmtMi(p._d) : ''}</small></span></button>`; }).join('') ||
+          <span class="t"><div>${esc(p.name)}</div><small>${esc(c.label)}${p.rating ? ' · ' + stars(p.rating) : ''}${from ? ' · ' + fmtMi(p._d) : ''}</small></span></button>`; }).join('') ||
         '<p class="hint">Nothing here yet.</p>';
     };
     $('#l-q').addEventListener('input', draw); draw();
@@ -285,7 +290,8 @@
     switch (el.dataset.act) {
       case 'close': closeSheet(); break;
       case 'add': startPlacing(); break;
-      case 'list': openList(); break;
+      case 'list': listFrom = null; openList(); break;
+      case 'around': if (places[selected]) { const p = places[selected]; listFrom = { id: p.id, name: p.name, lat: p.lat, lng: p.lng }; selected = null; render(); openList(); } break;
       case 'settings': openSettings(); break;
       case 'locate': locate(); break;
       case 'place-ok': finishPlacing(); break;
