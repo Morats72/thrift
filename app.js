@@ -1,7 +1,7 @@
 /* Good Finds - the app. Pins live on the phone; the Google Sheet is the shared copy. */
 (() => {
   // Bump this on every deploy, and bump SHELL in sw.js to match so phones pick up the new files.
-  const APP_VERSION = 'v1.2', APP_DATE = 'Oct 6 2026';
+  const APP_VERSION = 'v1.3', APP_DATE = 'Oct 6 2026';
   const { CATS, parseGoogleCsv, toCsv, solveOrder, googleLinks, appleLinks } = window.GF;
   const CAT = Object.fromEntries(CATS.map((c) => [c.id, c]));
   const $ = (s) => document.querySelector(s);
@@ -25,6 +25,13 @@
   let listSort = 'near'; // near | name | stale
   let placing = null;    // {id} when moving an existing pin, {} when adding
   let found = null;      // an address search result shown on the map
+  // Spots this phone has already seen. Anything that arrives from the other phone and is not in here is "new".
+  // Whatever is already on this phone counts as seen, and so does everything in the first sync with a sheet.
+  let seen = new Set(LS.get('seen', Object.keys(places)));
+  let seenSynced = LS.get('seenSynced', false);
+  const saveSeen = () => { if (seen) LS.set('seen', [...seen]); };
+  const isNew = (p) => !!seen && !p.deleted && !seen.has(p.id);
+  const announced = new Set();
 
   // A setup link (?sync=...) configures the shared sheet on a new phone.
   const qsSync = new URLSearchParams(location.search).get('sync');
@@ -79,7 +86,9 @@
   map.on('contextmenu', (e) => { if (!placing) openForm(blank(e.latlng.lat, e.latlng.lng), true); }); // long-press
 
   const live = () => Object.values(places).filter((p) => !p.deleted);
-  const shown = () => live().filter((p) => filter === 'all' || p.category === filter);
+  const fits = (p) => filter === 'all' || (filter === 'new' ? isNew(p) : p.category === filter);
+  const shown = () => live().filter(fits);
+  const filterLabel = () => (filter === 'new' ? 'New spots' : CAT[filter] ? CAT[filter].label : 'All spots');
   const catOf = (p) => CAT[p.category] || CAT.other;
   const inRoute = (id) => route.ids.includes(id);
   const stopNum = (id) => (route.plan ? route.plan.order.indexOf(id) + 1 : 0);
@@ -89,15 +98,19 @@
 
   function render() {
     pins.clearLayers();
-    for (const p of live().filter((q) => filter === 'all' || q.category === filter || inRoute(q.id))) {
+    for (const p of live().filter((q) => fits(q) || inRoute(q.id))) {
       const c = catOf(p), n = stopNum(p.id), done = route.done.includes(p.id);
       const icon = L.divIcon({ className: '', iconSize: [34, 42], iconAnchor: [17, 40],
-        html: `<div class="pin${p.id === selected ? ' sel' : ''}${inRoute(p.id) ? ' rt' : ''}${done ? ' done' : ''}" style="--c:${c.color}"><span>${c.icon}</span></div>${n ? `<b class="num">${n}</b>` : ''}` });
+        html: `<div class="pin${p.id === selected ? ' sel' : ''}${inRoute(p.id) ? ' rt' : ''}${done ? ' done' : ''}" style="--c:${c.color}"><span>${c.icon}</span></div>${n ? `<b class="num">${n}</b>` : ''}${isNew(p) ? '<i class="nw"></i>' : ''}` });
       L.marker([p.lat, p.lng], { icon, title: p.name, zIndexOffset: n ? 500 : 0 }).on('click', () => openDetail(p.id)).addTo(pins);
     }
     const all = live(), counts = {};
     all.forEach((p) => { const k = catOf(p).id; counts[k] = (counts[k] || 0) + 1; });
-    $('#chips').innerHTML = `<button class="chip${filter === 'all' ? ' on' : ''}" data-filter="all">All<b>${all.length}</b></button>` +
+    const fresh = all.filter(isNew).length;
+    if (filter === 'new' && !fresh) filter = 'all';
+    const nb = $('#ncount'); nb.textContent = fresh || ''; nb.hidden = !fresh;
+    $('#chips').innerHTML = (fresh ? `<button class="chip fresh${filter === 'new' ? ' on' : ''}" data-filter="new">🔴 New<b>${fresh}</b></button>` : '') +
+      `<button class="chip${filter === 'all' ? ' on' : ''}" data-filter="all">All<b>${all.length}</b></button>` +
       CATS.map((c) => `<button class="chip${filter === c.id ? ' on' : ''}" data-filter="${c.id}">${c.icon} ${esc(c.label)}<b>${counts[c.id] || 0}</b></button>`).join('');
     const rb = $('#rcount'); rb.textContent = route.ids.length || ''; rb.hidden = !route.ids.length;
     renderStatus();
@@ -148,10 +161,10 @@
 
   /* ---------- sync with the Google Sheet ---------- */
   const wire = (p) => ({ id: p.id, name: p.name, lat: p.lat, lng: p.lng, category: p.category, note: p.note || '', rating: p.rating || '',
-    date: p.date || '', addedBy: p.addedBy || '', updated: p.updated, deleted: p.deleted ? '1' : '', visits: p.visits || '' });
+    date: p.date || '', addedBy: p.addedBy || '', updated: p.updated, deleted: p.deleted ? '1' : '', visits: p.visits || '', city: p.city || '' });
   const unwire = (s) => ({ id: String(s.id), name: String(s.name || ''), lat: Number(s.lat), lng: Number(s.lng), category: String(s.category || 'other'),
     note: String(s.note || ''), rating: Number(s.rating) || 0, date: String(s.date || ''), addedBy: String(s.addedBy || ''),
-    updated: Number(s.updated) || 0, deleted: ['1', 'true', 'TRUE'].includes(String(s.deleted)), visits: String(s.visits || '') });
+    updated: Number(s.updated) || 0, deleted: ['1', 'true', 'TRUE'].includes(String(s.deleted)), visits: String(s.visits || ''), city: String(s.city || '') });
 
   async function sync(loud) {
     if (!api || syncing) return;
@@ -164,23 +177,37 @@
       const j = await res.json();
       if (!j.ok || !Array.isArray(j.places)) throw new Error(j.error || 'Unexpected reply');
       const sentAt = Object.fromEntries(sent.map((p) => [p.id, p.updated]));
-      const knowsVisits = Number(j.v) >= 2; LS.set('scriptV', Number(j.v) || 1);
-      const next = {}; let held = 0;
+      LS.set('scriptV', Number(j.v) || 1);
+      // Which fields this sheet script stores. Older scripts do not say, so work it out from the version.
+      const has = (f) => (Array.isArray(j.cols) ? j.cols.includes(f) : f === 'visits' && Number(j.v) >= 2);
+      const next = {}; let held = 0, pushTowns = 0;
       for (const s of j.places) {
         const p = unwire(s); if (!p.id || !isFinite(p.lat) || !isFinite(p.lng)) continue;
         // An older sheet script has no visits column: hold visit stamps on this phone until it is updated.
         const mine = places[p.id];
-        if (!knowsVisits && mine && mine.visits) { p.visits = mine.visits; p._dirty = true; held++; }
+        if (mine && !has('visits') && mine.visits) { p.visits = mine.visits; p._dirty = true; held++; }
+        // Town names are looked up on the phone. Keep ours if the sheet has none for this exact pin, and share it if the sheet can hold it.
+        if (mine && mine.city && !p.city && mine.lat === p.lat && mine.lng === p.lng) { p.city = mine.city; if (has('city')) { p._dirty = true; pushTowns++; } }
         next[p.id] = p;
       }
       // keep anything edited on this phone while the request was in the air
       for (const p of Object.values(places)) if (p._dirty && sentAt[p.id] !== p.updated) next[p.id] = p;
       places = next; save(); syncState = 'ok'; oldScript = held > 0; LS.set('lastSync', Date.now());
+      // First sync on this phone: everything already there counts as seen. After that, arrivals get flagged.
+      let arrived = [];
+      if (!seenSynced) { Object.keys(places).forEach((id) => seen.add(id)); saveSeen(); seenSynced = true; LS.set('seenSynced', true); }
+      else { arrived = live().filter((p) => isNew(p) && !announced.has(p.id)); arrived.forEach((p) => announced.add(p.id)); }
       syncing = false; render();
       if (first && !view) fitAll();
       const mode = $('#sheet').dataset.mode;
       if (mode === 'detail' && selected) { places[selected] && !places[selected].deleted ? openDetail(selected, true) : closeSheet(); }
-      if (loud) toast(oldScript ? 'Synced, but visit stamps need the updated sheet script.' : 'Synced. ' + live().length + ' spots.');
+      if (arrived.length) {
+        const who = [...new Set(arrived.map((p) => p.addedBy).filter(Boolean))].join(' and ') || 'Someone';
+        toast(`${who} added ${arrived.length === 1 ? '“' + arrived[0].name + '”' : arrived.length + ' new spots'}. Tap the red New chip to see.`, 5500);
+        refreshOpen();
+      } else if (loud) toast(oldScript ? 'Synced, but visit stamps need the updated sheet script.' : 'Synced. ' + live().length + ' spots.');
+      if (pushTowns && townPushes++ < 3) setTimeout(() => sync(), 2000);
+      fillTowns();
     } catch (e) {
       syncing = false; syncState = 'error'; renderStatus();
       if (loud) toast('Could not reach the sheet. Check the link in Settings.');
@@ -189,8 +216,61 @@
 
   function commit(p) {
     p.updated = Date.now(); p._dirty = true;
-    places[p.id] = p; save(); render(); sync();
+    if (seen && !seen.has(p.id)) { seen.add(p.id); saveSeen(); } // our own additions are never "new" to us
+    places[p.id] = p; save(); render(); sync(); fillTowns();
   }
+
+  /* ---------- town names ---------- */
+  // Each pin gets its mailing town: the US Census says which ZIP code area the pin is in, and zips.txt names the town.
+  const STATES = { Alabama: 'AL', Alaska: 'AK', Arizona: 'AZ', Arkansas: 'AR', California: 'CA', Colorado: 'CO', Connecticut: 'CT', Delaware: 'DE', 'District of Columbia': 'DC', Florida: 'FL', Georgia: 'GA', Hawaii: 'HI', Idaho: 'ID', Illinois: 'IL', Indiana: 'IN', Iowa: 'IA', Kansas: 'KS', Kentucky: 'KY', Louisiana: 'LA', Maine: 'ME', Maryland: 'MD', Massachusetts: 'MA', Michigan: 'MI', Minnesota: 'MN', Mississippi: 'MS', Missouri: 'MO', Montana: 'MT', Nebraska: 'NE', Nevada: 'NV', 'New Hampshire': 'NH', 'New Jersey': 'NJ', 'New Mexico': 'NM', 'New York': 'NY', 'North Carolina': 'NC', 'North Dakota': 'ND', Ohio: 'OH', Oklahoma: 'OK', Oregon: 'OR', Pennsylvania: 'PA', 'Rhode Island': 'RI', 'South Carolina': 'SC', 'South Dakota': 'SD', Tennessee: 'TN', Texas: 'TX', Utah: 'UT', Vermont: 'VT', Virginia: 'VA', Washington: 'WA', 'West Virginia': 'WV', Wisconsin: 'WI', Wyoming: 'WY' };
+  const ZCTA = '2020 Census ZIP Code Tabulation Areas';
+  let zipTable = null, filling = false, townPushes = 0;
+  const noTown = new Set();
+  async function zipTown(z) {
+    if (!zipTable) {
+      const t = await (await fetch('zips.txt')).text(), tbl = {};
+      for (const line of t.split('\n')) if (line.length > 6) tbl[line.slice(0, 5)] = line.slice(5).replace(/,([A-Z]{2})$/, ', $1');
+      zipTable = tbl;
+    }
+    return zipTable[z] || '';
+  }
+  // Returns 'Town, ST', or '' when there is nothing to name. Throws when the lookup cannot be reached.
+  async function townOf(p) {
+    const j = await jsonp('https://geocoding.geo.census.gov/geocoder/geographies/coordinates?benchmark=Public_AR_Current&vintage=Current_Current&layers=' + encodeURIComponent(ZCTA) + '&x=' + p.lng + '&y=' + p.lat, 12000);
+    const g = (((j || {}).result || {}).geographies || {})[ZCTA] || [];
+    if (g.length) { const t = await zipTown(g[0].ZCTA5 || g[0].BASENAME); if (t) return t; }
+    // Outside the US, or somewhere with no ZIP area (deep woods, open water): ask OpenStreetMap.
+    const k = await getJson('https://photon.komoot.io/reverse?lang=en&lat=' + p.lat + '&lon=' + p.lng, 9000);
+    const q = (k.features && k.features[0] && k.features[0].properties) || {}, us = q.countrycode === 'US';
+    const town = q.city || q.town || q.village || (q.county ? q.county + (us && !/county|parish|borough/i.test(q.county) ? ' County' : '') : '');
+    const st = us ? STATES[q.state] || q.state : q.state || q.country;
+    return town ? town + (st ? ', ' + st : '') : '';
+  }
+  async function fillTowns() {
+    if (filling || !navigator.onLine) return;
+    filling = true; let n = 0;
+    try {
+      for (;;) {
+        const p = live().find((q) => !q.city && !noTown.has(q.id));
+        if (!p) break;
+        let t; try { t = await townOf(p); } catch (e) { break; } // no signal: try again later
+        const cur = places[p.id];
+        if (cur && !cur.city && cur.lat === p.lat && cur.lng === p.lng) {
+          if (t) { cur.city = t; cur._dirty = true; n++; if (n % 8 === 0) { save(); render(); refreshOpen(); } } // same edit time on purpose: a looked-up town must never beat a real edit
+          else noTown.add(p.id);
+        }
+        await new Promise((r) => setTimeout(r, 350));
+      }
+    } finally { filling = false; if (n) { save(); render(); refreshOpen(); sync(); } }
+  }
+  function refreshOpen() {
+    const m = $('#sheet').dataset.mode;
+    if (!$('#sheet').classList.contains('open')) return;
+    if (m === 'list' || (m === 'route' && !route.plan)) { const y = $('#sheet').scrollTop; reopenList(); $('#sheet').scrollTop = y; }
+    else if (m === 'route') { const y = $('#sheet').scrollTop; openPlan(); $('#sheet').scrollTop = y; }
+    else if (m === 'detail' && selected && places[selected]) openDetail(selected, true);
+  }
+  const townTag = (p) => (p.city ? '<b class="town">' + esc(p.city) + '</b> · ' : '');
 
   /* ---------- sheet (bottom panel) ---------- */
   function openSheet(mode, html) {
@@ -224,17 +304,20 @@
 
   function openDetail(id, quiet) {
     const p = places[id]; if (!p) return;
+    const fresh = isNew(p);
+    if (fresh) { seen.add(id); saveSeen(); } // looking at it is what clears the flag
     selected = id; render();
     const c = catOf(p), here = visitsOf(p).includes(today()), n = stopNum(id);
     openSheet('detail', `
       <h2>${esc(p.name)}</h2>
+      ${p.city ? `<p class="meta where">${esc(p.city)}</p>` : ''}
       <p class="meta"><span class="badge" style="--c:${c.color}">${c.icon} ${esc(c.label)}</span>
         ${myLoc ? ' &nbsp;' + fmtMi(distMi(myLoc, p)) + ' away' : ''}${n ? ' &nbsp;Stop ' + n + ' on the route' : ''}</p>
       ${p.rating ? `<div class="stars">${stars(p.rating)}</div>` : ''}
       ${p.date ? `<p class="meta">📅 ${esc(niceDate(p.date))}</p>` : ''}
       <p class="meta" id="d-visit">🕘 ${visitLine(p)}</p>
       ${p.note ? `<div class="note">${esc(p.note)}</div>` : ''}
-      ${p.addedBy ? `<p class="meta">Flagged by ${esc(p.addedBy)}</p>` : ''}
+      ${p.addedBy ? `<p class="meta">${fresh ? '<u class="newtag">NEW</u> ' : ''}Flagged by ${esc(p.addedBy)}</p>` : fresh ? '<p class="meta"><u class="newtag">NEW</u></p>' : ''}
       <div class="row">
         <button class="btn ${here ? '' : 'stamp'}" data-act="stamp">${here ? '✓ Stopped here today (undo)' : '🕘 Stopped here today'}</button>
       </div>
@@ -254,7 +337,7 @@
   }
 
   const blank = (lat, lng) => ({ id: 'p_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6), name: '', lat: +lat.toFixed(6), lng: +lng.toFixed(6),
-    category: filter !== 'all' ? filter : 'thrift', note: '', rating: 0, date: '', visits: '', addedBy: me });
+    category: CAT[filter] ? filter : 'thrift', note: '', rating: 0, date: '', visits: '', city: '', addedBy: me });
 
   let draft = null, draftNew = false;
   const visitChips = () => visitsOf(draft).reverse().map((d) => `<button type="button" class="vchip" data-unvisit="${d}">${esc(niceDate(d))} ×</button>`).join('') || '<span class="hint">None yet.</span>';
@@ -263,6 +346,7 @@
     openSheet('form', `
       <h2>${isNew ? 'New spot' : 'Edit spot'}</h2>
       <label for="f-name">Name</label><input id="f-name" type="text" value="${esc(draft.name)}" placeholder="What is it?" autocomplete="off">
+      <label for="f-city">Town</label><input id="f-city" type="text" value="${esc(draft.city || '')}" placeholder="Fills itself in when there is signal" autocomplete="off">
       <label>Category</label>
       <div class="cats">${CATS.map((c) => `<button type="button" data-cat="${c.id}" class="${draft.category === c.id ? 'on' : ''}">${c.icon} ${esc(c.label)}</button>`).join('')}</div>
       <label>Worth the stop?</label>
@@ -275,7 +359,7 @@
       <div class="row"><button class="btn" data-act="close">Cancel</button><button class="btn go" data-act="save">Save</button></div>`);
   }
   function readForm() {
-    draft.name = $('#f-name').value.trim(); draft.date = $('#f-date').value; draft.note = $('#f-note').value.trim();
+    draft.name = $('#f-name').value.trim(); draft.city = $('#f-city').value.trim(); draft.date = $('#f-date').value; draft.note = $('#f-note').value.trim();
   }
 
   function sortedList(list, from) {
@@ -287,24 +371,25 @@
     return list;
   }
   const subline = (p, from) => { const c = catOf(p), lv = lastVisit(p);
-    return esc(c.label) + (p.rating ? ' · ' + stars(p.rating) : '') + (from ? ' · ' + fmtMi(p._d) : '') + (lv ? ' · last stop ' + ago(lv) : ''); };
+    return townTag(p) + esc(c.label) + (p.rating ? ' · ' + stars(p.rating) : '') + (from ? ' · ' + fmtMi(p._d) : '') + (lv ? ' · last stop ' + ago(lv) : ''); };
   const sortChips = () => `<div class="seg">${[['near', 'Nearest'], ['name', 'A to Z'], ['stale', 'Longest since a stop']].map(([k, t]) => `<button data-sort="${k}" class="${listSort === k ? 'on' : ''}">${t}</button>`).join('')}</div>`;
 
   function openList(q) {
     const from = listFrom || myLoc;
     const list = sortedList(shown().filter((p) => !listFrom || p.id !== listFrom.id), from);
     openSheet('list', `
-      <h2>${listFrom ? 'Around ' + esc(listFrom.name) : filter === 'all' ? 'All spots' : esc(CAT[filter].label)} <small class="cnt">${list.length}</small></h2>
-      <input id="l-q" type="search" placeholder="Search names and notes" value="${esc(q || '')}">
+      <h2>${listFrom ? 'Around ' + esc(listFrom.name) : esc(filterLabel())} <small class="cnt">${list.length}</small></h2>
+      ${filter === 'new' && !listFrom ? '<div class="row" style="margin:6px 0 10px"><button class="btn" data-act="seen-all">Mark all as seen</button></div>' : ''}
+      <input id="l-q" type="search" placeholder="Search names, towns and notes" value="${esc(q || '')}">
       ${sortChips()}
-      <p class="hint">${listSort === 'stale' ? 'Longest since we stopped first; never-visited at the bottom.' : listSort === 'name' ? 'Alphabetical.' : listFrom ? 'Closest to this pin first' + (filter === 'all' ? '.' : ', ' + esc(CAT[filter].label) + ' only.') : myLoc ? 'Closest to you first.' : 'Tap ◎ on the map to sort these by distance.'}</p>
+      <p class="hint">${listSort === 'stale' ? 'Longest since we stopped first; never-visited at the bottom.' : listSort === 'name' ? 'Alphabetical.' : listFrom ? 'Closest to this pin first' + (filter === 'all' ? '.' : ', ' + esc(filterLabel()) + ' only.') : myLoc ? 'Closest to you first.' : 'Tap ◎ on the map to sort these by distance.'}</p>
       <div id="l-items"></div>`);
     const draw = () => {
       const needle = $('#l-q').value.trim().toLowerCase();
-      const rows = list.filter((p) => !needle || (p.name + ' ' + p.note).toLowerCase().includes(needle));
+      const rows = list.filter((p) => !needle || (p.name + ' ' + (p.city || '') + ' ' + p.note).toLowerCase().includes(needle));
       $('#l-items').innerHTML = rows.map((p) => { const c = catOf(p);
         return `<button class="item" data-open="${esc(p.id)}"><span class="dot" style="--c:${c.color}">${c.icon}</span>
-          <span class="t"><div>${esc(p.name)}</div><small>${subline(p, from)}</small></span></button>`; }).join('') ||
+          <span class="t"><div>${esc(p.name)}${isNew(p) ? ' <u class="newtag">NEW</u>' : ''}</div><small>${subline(p, from)}${isNew(p) && p.addedBy ? ' · added by ' + esc(p.addedBy) : ''}</small></span></button>`; }).join('') ||
         '<p class="hint">Nothing here yet.</p>';
     };
     $('#l-q').addEventListener('input', draw); draw();
@@ -358,9 +443,9 @@
       const q = $('#q').value.trim(); if (q.length < 3) return;
       const out = $('#q-out'); $('#q').blur();
       const needle = q.toLowerCase();
-      const mine = live().filter((p) => (p.name + ' ' + p.note).toLowerCase().includes(needle)).slice(0, 5);
+      const mine = live().filter((p) => (p.name + ' ' + (p.city || '') + ' ' + p.note).toLowerCase().includes(needle)).slice(0, 5);
       const mineHtml = mine.length ? '<label>Already on our map</label>' + mine.map((p) => { const c = catOf(p);
-        return `<button class="item" data-open="${esc(p.id)}"><span class="dot" style="--c:${c.color}">${c.icon}</span><span class="t"><div>${esc(p.name)}</div><small>${esc(c.label)}</small></span></button>`; }).join('') : '';
+        return `<button class="item" data-open="${esc(p.id)}"><span class="dot" style="--c:${c.color}">${c.icon}</span><span class="t"><div>${esc(p.name)}</div><small>${townTag(p)}${esc(c.label)}</small></span></button>`; }).join('') : '';
       out.innerHTML = mineHtml + '<p class="hint">Looking…</p>';
       try {
         hits = await geocode(q);
@@ -451,7 +536,7 @@
       <div class="row" style="margin-top:8px"><button class="btn go" data-act="r-build">Build route</button><button class="btn" data-act="r-clear" style="flex:0 0 auto">Clear</button></div>
       <div id="r-items">${list.map((p) => { const c = catOf(p);
         return `<button class="item pick${inRoute(p.id) ? ' on' : ''}" data-pick="${esc(p.id)}"><span class="box"></span><span class="dot" style="--c:${c.color}">${c.icon}</span>
-          <span class="t"><div>${esc(p.name)}</div><small>${subline(p, myLoc)}</small></span></button>`; }).join('') || '<p class="hint">Nothing in this category.</p>'}</div>`);
+          <span class="t"><div>${esc(p.name)}${isNew(p) ? ' <u class="newtag">NEW</u>' : ''}</div><small>${subline(p, myLoc)}</small></span></button>`; }).join('') || '<p class="hint">Nothing in this category.</p>'}</div>`);
     $('#r-loop').addEventListener('change', (e) => { route.loop = e.target.checked; saveRoute(); });
   }
   function openPlan() {
@@ -464,11 +549,10 @@
       <p class="hint">${pl.road ? 'Ordered by drive time from where you were standing.' : 'Straight-line guess (no road data when this was built). Rebuild when you have signal.'}${pl.back ? ' Ends back at the start.' : ''}</p>
       ${next ? `<div class="row"><a class="btn go" href="${appleTo(next)}" target="_blank" rel="noopener">Next stop in Apple Maps: ${esc(next.name)}</a></div>` : '<p class="note">Every stop is checked off. Nice haul.</p>'}
       ${todo.length ? g.map((x) => `<div class="row"><a class="btn" href="${x.url}" target="_blank" rel="noopener">Whole route in Google Maps${g.length > 1 ? ' (stops ' + (x.from || '') + (x.count > 1 ? ' to ' + (x.to || 'start') : '') + ')' : ''}</a></div>`).join('') : ''}
-      ${todo.length > 1 ? `<div class="row"><a class="btn" href="${a.a}" target="_blank" rel="noopener">Apple whole route: test A</a><a class="btn" href="${a.b}" target="_blank" rel="noopener">test B</a></div>
-        <p class="hint">The two Apple tests are experiments. Tell Claude which one loads every stop, if either.</p>` : ''}
+      ${todo.length > 1 ? `<div class="row"><a class="btn" href="${a.a}" target="_blank" rel="noopener">Whole route in Apple Maps${todo.length + (backTo ? 1 : 0) > 14 ? ' (first 14 stops)' : ''}</a></div>` : ''}
       <div id="p-items">${stops.map((p, i) => { const c = catOf(p), l = pl.legs[i] || {}, done = route.done.includes(p.id);
         return `<div class="stop${done ? ' done' : ''}"><b class="n">${i + 1}</b>
-          <button class="t" data-open="${esc(p.id)}"><div>${esc(p.name)}</div><small>${c.icon} ${l.mi != null ? fmtMi(l.mi) + (l.min != null ? ' · ' + fmtMin(l.min) : '') + (i ? '' : ' from start') : ''}</small></button>
+          <button class="t" data-open="${esc(p.id)}"><div>${esc(p.name)}</div><small>${townTag(p)}${l.mi != null ? fmtMi(l.mi) + (l.min != null ? ' · ' + fmtMin(l.min) : '') + (i ? '' : ' from start') : ''}</small></button>
           <a class="mini" href="${appleTo(p)}" target="_blank" rel="noopener">Go</a>
           <button class="mini${done ? ' on' : ''}" data-done="${esc(p.id)}">${done ? '✓' : 'Stopped'}</button></div>`; }).join('')}
         ${pl.back ? `<div class="stop"><b class="n">↩</b><span class="t"><div>Back to the start</div><small>${fmtMi(pl.back.mi)}${pl.back.min != null ? ' · ' + fmtMin(pl.back.min) : ''}</small></span></div>` : ''}</div>
@@ -495,6 +579,7 @@
         <button class="btn" data-act="s-fit">Show all</button></div>
       <input id="s-file" type="file" accept=".csv,text/csv" multiple hidden>
       <p class="hint">Import takes the CSV files from Google Takeout (Saved). Spots already on the map are skipped.</p>
+      <p class="hint">Town names come from the US Census ZIP areas and the GeoNames postal table (CC BY 4.0).</p>
       <p class="hint">Good Finds ${APP_VERSION} — ${APP_DATE}${api ? ' · sheet script v' + LS.get('scriptV', '?') : ''}</p>`);
     $('#s-file').addEventListener('change', importFiles);
   }
@@ -508,13 +593,14 @@
         places[it.id] = Object.assign({ rating: 0, date: '', visits: '', addedBy: me || 'Google import', updated: Date.now(), _dirty: true }, it); added++;
       }
     }
+    if (seen) { Object.keys(places).forEach((id) => seen.add(id)); saveSeen(); }
     save(); render(); sync(); closeSheet(); if (added) fitAll();
     toast(`Added ${added}. Skipped ${dupes} already here${bad ? ', ' + bad + ' unreadable' : ''}.`);
   }
 
   async function exportCsv() {
-    const rows = [['name', 'category', 'lat', 'lng', 'rating', 'date', 'last stop', 'all stops', 'note', 'addedBy']].concat(
-      live().sort((a, b) => a.name.localeCompare(b.name)).map((p) => [p.name, catOf(p).label, p.lat, p.lng, p.rating || '', p.date, lastVisit(p), visitsOf(p).join(' '), p.note, p.addedBy]));
+    const rows = [['name', 'town', 'category', 'lat', 'lng', 'rating', 'date', 'last stop', 'all stops', 'note', 'addedBy']].concat(
+      live().sort((a, b) => a.name.localeCompare(b.name)).map((p) => [p.name, p.city || '', catOf(p).label, p.lat, p.lng, p.rating || '', p.date, lastVisit(p), visitsOf(p).join(' '), p.note, p.addedBy]));
     const name = 'good-finds-' + new Date().toISOString().slice(0, 10) + '.csv';
     const file = new File([toCsv(rows)], name, { type: 'text/csv' });
     try { if (navigator.canShare && navigator.canShare({ files: [file] })) { await navigator.share({ files: [file] }); return; } } catch (e) { if (e.name === 'AbortError') return; }
@@ -529,12 +615,12 @@
   function stopPlacing() { placing = null; document.body.classList.remove('placing'); }
   function finishPlacing() {
     const c = map.getCenter(), was = placing; stopPlacing();
-    if (was.id && places[was.id]) { const p = places[was.id]; p.lat = +c.lat.toFixed(6); p.lng = +c.lng.toFixed(6); commit(p); openDetail(p.id, true); toast('Pin moved.'); }
+    if (was.id && places[was.id]) { const p = places[was.id]; p.lat = +c.lat.toFixed(6); p.lng = +c.lng.toFixed(6); p.city = ''; noTown.delete(p.id); commit(p); openDetail(p.id, true); toast('Pin moved.'); }
     else openForm(blank(c.lat, c.lng), true);
   }
 
   let toastT;
-  function toast(msg) { const t = $('#toast'); t.textContent = msg; t.classList.add('show'); clearTimeout(toastT); toastT = setTimeout(() => t.classList.remove('show'), 2800); }
+  function toast(msg, ms) { const t = $('#toast'); t.textContent = msg; t.classList.add('show'); clearTimeout(toastT); toastT = setTimeout(() => t.classList.remove('show'), ms || 2800); }
 
   function reopenList() { const m = $('#sheet').dataset.mode; if (m === 'list') openList($('#l-q') ? $('#l-q').value : ''); else if (m === 'route' && !route.plan) openRoute(); }
 
@@ -562,6 +648,7 @@
     }
     switch (d.act) {
       case 'close': closeSheet(); break;
+      case 'seen-all': live().forEach((p) => seen.add(p.id)); saveSeen(); filter = 'all'; render(); closeSheet(); toast('All caught up.'); break;
       case 'add': startPlacing(); break;
       case 'list': listFrom = null; openList(); break;
       case 'around': if (places[selected]) { const p = places[selected]; listFrom = { id: p.id, name: p.name, lat: p.lat, lng: p.lng }; listSort = 'near'; selected = null; render(); openList(); } break;
@@ -602,7 +689,7 @@
       case 'r-clear': clearRoute(false); closeSheet(); toast('Route cleared.'); break;
       case 's-save':
         me = $('#s-me').value.trim(); LS.set('me', me);
-        api = $('#s-api').value.trim(); LS.set('api', api);
+        { const was = api; api = $('#s-api').value.trim(); LS.set('api', api); if (api !== was) { seenSynced = false; LS.set('seenSynced', false); } }
         closeSheet(); render();
         if (api) sync(true); else toast('Saved. Spots stay on this phone until you add the sheet link.');
         break;
@@ -624,7 +711,8 @@
   if (!view && live().length) fitAll();
   if (!me) openSettings(true);
   sync();
-  window.addEventListener('online', () => sync());
+  window.addEventListener('online', () => { sync(); fillTowns(); });
+  setTimeout(fillTowns, 2500);
   window.addEventListener('offline', renderStatus);
   document.addEventListener('visibilitychange', () => { if (!document.hidden) sync(); });
   setInterval(() => { if (!document.hidden) sync(); }, 60000);

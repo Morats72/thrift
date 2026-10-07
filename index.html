@@ -58,11 +58,19 @@ h1 i{color:var(--rust);font-style:italic;font-weight:400}
 
 .fabs.left{right:auto;left:14px}
 .fab{position:relative}
-#rcount{position:absolute;top:-4px;right:-4px;min-width:20px;height:20px;border-radius:10px;background:var(--rust);color:#fff;font:600 12px/20px var(--sans);font-style:normal;padding:0 5px}
+#rcount,#ncount{position:absolute;top:-4px;right:-4px;min-width:20px;height:20px;border-radius:10px;background:var(--rust);color:#fff;font:600 12px/20px var(--sans);font-style:normal;padding:0 5px}
 .pin.rt{box-shadow:0 0 0 3px var(--rust),0 2px 5px rgba(0,0,0,.35)}
 .pin.done{opacity:.55}
 .pin.tmp{border-style:dashed}
 .num{position:absolute;left:22px;top:-8px;min-width:20px;height:20px;border-radius:10px;background:var(--ink);color:#fff;font:700 12px/20px var(--sans);text-align:center;padding:0 5px;border:1.5px solid #fff}
+.town{color:var(--ink);font-weight:600}
+.meta.where{color:var(--ink);font-weight:600;font-size:15px;margin:-2px 0 6px}
+#ncount{background:#d0241b}
+.nw{position:absolute;left:-3px;top:-5px;width:14px;height:14px;border-radius:50%;background:#d0241b;border:2px solid #fff;box-shadow:0 0 0 1px rgba(0,0,0,.2)}
+.chip.fresh{border-color:#d0241b;color:#d0241b;font-weight:600}
+.chip.fresh.on{background:#d0241b;color:#fff}
+.chip.fresh b{color:inherit}
+.newtag{text-decoration:none;font:700 10px/1 var(--sans);letter-spacing:.6px;color:#fff;background:#d0241b;border-radius:4px;padding:3px 5px;vertical-align:2px}
 .cnt{font:14px var(--sans);color:var(--soft);font-weight:400}
 .seg{display:flex;gap:6px;margin:10px 0 2px;flex-wrap:wrap}
 .seg button{border:1px solid var(--line);background:#fff;border-radius:99px;padding:6px 11px;font-size:13px}
@@ -145,7 +153,7 @@ textarea{min-height:80px;resize:vertical}
 </div>
 <div class="fabs">
   <button class="fab" data-act="settings" aria-label="Settings">⚙️</button>
-  <button class="fab" data-act="list" aria-label="List">☰</button>
+  <button class="fab" data-act="list" aria-label="List">☰<i id="ncount" hidden></i></button>
   <button class="fab" data-act="locate" aria-label="Where am I">◎</button>
   <button class="fab main" data-act="add" aria-label="Add a spot">+</button>
 </div>
