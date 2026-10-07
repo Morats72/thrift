@@ -1,7 +1,7 @@
 /* Good Finds - the app. Pins live on the phone; the Google Sheet is the shared copy. */
 (() => {
-  // Bump this on every deploy, and bump SHELL in sw.js to match so phones pick up the new files.
-  const APP_VERSION = 'v1.5', APP_DATE = 'Oct 7 2026';
+  // Bump this on every deploy, and bump VERSION in sw.js to match. That pair is what makes phones update.
+  const APP_VERSION = 'v1.6', APP_DATE = 'Oct 7 2026';
   const { CATS, parseGoogleCsv, toCsv, solveOrder, googleLinks, appleLinks } = window.GF;
   const CAT = Object.fromEntries(CATS.map((c) => [c.id, c]));
   const $ = (s) => document.querySelector(s);
@@ -639,7 +639,10 @@
       <input id="s-file" type="file" accept=".csv,text/csv" multiple hidden>
       <p class="hint">Import takes the CSV files from Google Takeout (Saved). Spots already on the map are skipped.</p>
       <p class="hint">Town names come from the US Census ZIP areas and the GeoNames postal table (CC BY 4.0).</p>
-      <p class="hint">Good Finds ${APP_VERSION} — ${APP_DATE}${api ? ' · sheet script v' + LS.get('scriptV', '?') : ''}</p>`);
+      <label>App version</label>
+      <p class="hint" style="margin-top:0">Good Finds ${APP_VERSION} — ${APP_DATE}${api ? ' · sheet script v' + LS.get('scriptV', '?') : ''}</p>
+      <div class="row" style="margin-top:8px"><button class="btn" data-act="s-update">Check for update</button><button class="btn" data-act="s-reload">Reload app files</button></div>
+      <p class="hint">The app checks by itself whenever it opens. "Reload app files" is the big hammer if a phone ever looks stuck; your spots are not touched.</p>`);
     $('#s-file').addEventListener('change', importFiles);
   }
 
@@ -765,12 +768,56 @@
       case 's-export': exportCsv(); break;
       case 's-fit': closeSheet(); fitAll(); break;
       case 's-past': openPast(); break;
+      case 's-update': closeSheet(); checkUpdate('manual'); break;
+      case 's-reload': closeSheet(); applyUpdate(null); break;
+      case 'do-update': applyUpdate(latestV); break;
       case 'past-clear':
         if (!el.classList.contains('arm')) { el.classList.add('arm'); el.textContent = 'Tap again to delete them all'; break; }
         { const list = past(), now = Date.now(); list.forEach((p) => { p.deleted = true; p.updated = now; p._dirty = true; }); pastN = 0; save(); render(); sync(); closeSheet(); toast('Deleted ' + list.length + ' past ' + (list.length === 1 ? 'sale' : 'sales') + '.'); }
         break;
     }
   });
+
+  /* ---------- keeping the app itself up to date ---------- */
+  const swOK = 'serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost');
+  let latestV = null, lastCheck = 0, updating = false;
+  const ss = { get(k) { try { return sessionStorage.getItem(k); } catch (e) { return null; } }, set(k, v) { try { sessionStorage.setItem(k, v); } catch (e) {} } };
+  // Asks the server (never the saved copy) which version is live. how: 'launch' | 'resume' | 'manual'
+  async function checkUpdate(how) {
+    if (!swOK || updating) return;
+    if (!navigator.onLine) { if (how === 'manual') toast('No signal, so I cannot check right now.'); return; }
+    if (how === 'manual') toast('Checking…');
+    lastCheck = Date.now();
+    try {
+      const txt = await (await fetch('sw.js?check=' + Date.now(), { cache: 'no-store' })).text();
+      const m = /VERSION = '(v[\d.]+)'/.exec(txt) || /gf-shell-(v[\d.]+)/.exec(txt);
+      if (!m) throw new Error('no version');
+      latestV = m[1];
+      if (latestV === APP_VERSION) { $('#upd').hidden = true; if (how === 'manual') toast('You are on the latest version, ' + APP_VERSION + '.'); return; }
+      // Update by itself at launch or when asked. If someone is mid-task (a panel is open), or it already tried once, show the banner instead.
+      const busy = $('#sheet').classList.contains('open') || !!placing;
+      if (how === 'manual' || (how === 'launch' && !busy && ss.get('gf.upd') !== latestV)) return applyUpdate(latestV);
+      $('#upd').textContent = 'Version ' + latestV.slice(1) + ' is ready. Tap here to update.'; $('#upd').hidden = false;
+    } catch (e) { if (how === 'manual') toast('Could not check right now.'); }
+  }
+  // Swaps in the new set of app files and restarts. Spots, settings and unsynced changes live elsewhere and are not touched.
+  async function applyUpdate(v) {
+    if (!swOK || updating) return;
+    if (!navigator.onLine) return toast('No signal. Try again when you have bars.');
+    updating = true; if (v) ss.set('gf.upd', v);
+    $('#upd').textContent = v ? 'Updating to version ' + v.slice(1) + '…' : 'Reloading app files…'; $('#upd').hidden = false;
+    try {
+      if (!v) { const ks = await caches.keys(); await Promise.all(ks.filter((k) => k.startsWith('gf-shell-')).map((k) => caches.delete(k))); }
+      const reg = await navigator.serviceWorker.getRegistration();
+      if (reg) {
+        await reg.update().catch(() => {});
+        const w = reg.installing || reg.waiting;
+        if (w) await new Promise((res) => { const t = setTimeout(res, 20000); w.addEventListener('statechange', () => { if (w.state === 'activated' || w.state === 'redundant') { clearTimeout(t); res(); } }); });
+      }
+      if (v) { const ks = await caches.keys(); if (ks.includes('gf-shell-' + v)) await Promise.all(ks.filter((k) => k.startsWith('gf-shell-') && k !== 'gf-shell-' + v).map((k) => caches.delete(k))); }
+    } catch (e) { /* reload anyway */ }
+    location.reload();
+  }
 
   /* ---------- go ---------- */
   $('#ver').textContent = APP_VERSION;
@@ -781,8 +828,8 @@
   window.addEventListener('online', () => { sync(); fillTowns(); });
   setTimeout(fillTowns, 2500);
   window.addEventListener('offline', renderStatus);
-  document.addEventListener('visibilitychange', () => { if (!document.hidden) sync(); });
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) { sync(); if (Date.now() - lastCheck > 120000) checkUpdate('resume'); } });
   setInterval(() => { if (!document.hidden) sync(); }, 60000);
-  if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) navigator.serviceWorker.register('sw.js').catch(() => {});
-  window.GFapp = { version: APP_VERSION, tick, sync, get places() { return places; }, get route() { return route; } }; // for troubleshooting from the console
+  if (swOK) { navigator.serviceWorker.register('sw.js').catch(() => {}); setTimeout(() => checkUpdate('launch'), 1200); }
+  window.GFapp = { version: APP_VERSION, checkUpdate, tick, sync, get places() { return places; }, get route() { return route; } }; // for troubleshooting from the console
 })();

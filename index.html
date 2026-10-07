@@ -137,6 +137,8 @@ textarea{min-height:80px;resize:vertical}
 .item .t div{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .item small{color:var(--soft)}
 .hint{font-size:13px;color:var(--soft);margin:6px 0 0;line-height:1.4}
+#upd{position:fixed;left:12px;right:12px;top:calc(var(--top) + 104px);z-index:1900;border:0;border-radius:12px;padding:12px 14px;background:var(--green);color:#fff;font-weight:600;font-size:15px;box-shadow:0 4px 14px rgba(0,0,0,.25)}
+#upd[hidden]{display:none}
 #toast{position:fixed;left:50%;top:calc(var(--top) + 110px);transform:translateX(-50%);z-index:2000;background:var(--ink);color:var(--paper);
   padding:10px 16px;border-radius:99px;font-size:14px;opacity:0;transition:opacity .2s;pointer-events:none;max-width:88vw;text-align:center}
 #toast.show{opacity:.95}
@@ -169,6 +171,7 @@ textarea{min-height:80px;resize:vertical}
   </div>
 </div>
 <section id="sheet" aria-live="polite"></section>
+<button id="upd" data-act="do-update" hidden></button>
 <div id="toast"></div>
 <script src="leaflet.js"></script>
 <script src="maplibre-gl.js"></script>
