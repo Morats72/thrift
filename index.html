@@ -55,6 +55,35 @@ h1 i{color:var(--rust);font-style:italic;font-weight:400}
 .fab{width:52px;height:52px;border-radius:50%;border:1px solid var(--line);background:var(--card);font-size:22px;box-shadow:0 3px 10px rgba(0,0,0,.2)}
 .fab.main{background:var(--rust);color:#fff;border-color:var(--rust);font-size:30px;line-height:1}
 
+.fabs.left{right:auto;left:14px}
+.fab{position:relative}
+#rcount{position:absolute;top:-4px;right:-4px;min-width:20px;height:20px;border-radius:10px;background:var(--rust);color:#fff;font:600 12px/20px var(--sans);font-style:normal;padding:0 5px}
+.pin.rt{box-shadow:0 0 0 3px var(--rust),0 2px 5px rgba(0,0,0,.35)}
+.pin.done{opacity:.55}
+.pin.tmp{border-style:dashed}
+.num{position:absolute;left:22px;top:-8px;min-width:20px;height:20px;border-radius:10px;background:var(--ink);color:#fff;font:700 12px/20px var(--sans);text-align:center;padding:0 5px;border:1.5px solid #fff}
+.cnt{font:14px var(--sans);color:var(--soft);font-weight:400}
+.seg{display:flex;gap:6px;margin:10px 0 2px;flex-wrap:wrap}
+.seg button{border:1px solid var(--line);background:#fff;border-radius:99px;padding:6px 11px;font-size:13px}
+.seg button.on{background:var(--ink);color:var(--paper);border-color:var(--ink)}
+.item.pick .box{flex:none;width:24px;height:24px;border-radius:7px;border:2px solid var(--line);background:#fff;display:flex;align-items:center;justify-content:center;font-size:15px;color:#fff}
+.item.pick.on .box{background:var(--green);border-color:var(--green)}
+.item.pick.on .box:before{content:"✓"}
+label.check{display:flex;align-items:center;gap:10px;text-transform:none;letter-spacing:0;font-size:15px;color:var(--ink)}
+label.check input{width:22px;height:22px}
+.stop{display:flex;gap:10px;align-items:center;padding:10px 0;border-bottom:1px solid var(--line)}
+.stop .n{flex:none;width:28px;height:28px;border-radius:50%;background:var(--ink);color:#fff;font:700 13px/28px var(--sans);text-align:center}
+.stop .t{flex:1;min-width:0;border:0;background:none;text-align:left;padding:0}
+.stop .t div{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.stop small{color:var(--soft)}
+.stop.done .t,.stop.done .n{opacity:.45}
+.stop.done .t div{text-decoration:line-through}
+.mini{flex:none;border:1px solid var(--line);background:var(--paper);border-radius:10px;padding:8px 10px;font-size:14px;text-decoration:none;color:var(--ink)}
+.mini.on{background:var(--green);border-color:var(--green);color:#fff}
+.btn.stamp{background:var(--gold);border-color:var(--gold);color:#fff;font-weight:600}
+.vchips{display:flex;flex-wrap:wrap;gap:6px}
+.vchip{border:1px solid var(--line);background:#fff;border-radius:99px;padding:6px 10px;font-size:13px}
+body.hybrid .leaflet-control-attribution{background:rgba(244,236,220,.92)!important}
 #cross{position:fixed;left:50%;top:50%;z-index:900;width:44px;height:44px;margin:-22px 0 0 -22px;pointer-events:none;display:none}
 #cross:before,#cross:after{content:"";position:absolute;background:var(--rust)}
 #cross:before{left:21px;top:0;width:2px;height:44px}
@@ -64,6 +93,7 @@ h1 i{color:var(--rust);font-style:italic;font-weight:400}
 #placebar p{margin:0 0 10px;font-size:14px;color:var(--soft)}
 body.placing #cross,body.placing #placebar{display:block}
 body.placing .fabs{display:none}
+body.placing #cross:before,body.placing #cross:after{box-shadow:0 0 0 1px #fff}
 
 #sheet{position:fixed;left:0;right:0;bottom:0;z-index:1200;max-height:78vh;overflow-y:auto;-webkit-overflow-scrolling:touch;
   background:var(--card);border-radius:20px 20px 0 0;border-top:1px solid var(--line);box-shadow:0 -6px 24px rgba(0,0,0,.22);
@@ -107,6 +137,11 @@ textarea{min-height:80px;resize:vertical}
   <div id="chips"></div>
 </header>
 <div id="cross"></div>
+<div class="fabs left">
+  <button class="fab" data-act="search" aria-label="Find an address">🔍</button>
+  <button class="fab" data-act="layer" aria-label="Switch map view">🛰️</button>
+  <button class="fab" data-act="route" aria-label="Plan a route">🧭<i id="rcount" hidden></i></button>
+</div>
 <div class="fabs">
   <button class="fab" data-act="settings" aria-label="Settings">⚙️</button>
   <button class="fab" data-act="list" aria-label="List">☰</button>

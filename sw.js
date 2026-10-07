@@ -1,6 +1,6 @@
 /* Good Finds - offline support. App files load from the phone first and refresh in the background.
    Map tiles you have already looked at are kept so the map still draws with no signal. */
-const SHELL = 'gf-shell-v2', TILES = 'gf-tiles-v1', MAX_TILES = 4000;
+const SHELL = 'gf-shell-v3', TILES = 'gf-tiles-v1', MAX_TILES = 4000;
 const FILES = ['./', 'index.html', 'app.js', 'lib.js', 'leaflet.js', 'leaflet.css', 'maplibre-gl.js', 'maplibre-gl.css', 'leaflet-maplibre-gl.js', 'manifest.json', 'icon-180.png', 'icon-192.png', 'icon-512.png'];
 
 self.addEventListener('install', (e) => { e.waitUntil(caches.open(SHELL).then((c) => c.addAll(FILES)).then(() => self.skipWaiting())); });
@@ -17,9 +17,9 @@ self.addEventListener('fetch', (e) => {
   const req = e.request;
   if (req.method !== 'GET') return;
   const url = new URL(req.url);
-  if (url.hostname === 'tiles.openfreemap.org' || url.hostname === 'tile.openstreetmap.org') {
+  if (url.hostname === 'tiles.openfreemap.org' || url.hostname === 'tile.openstreetmap.org' || url.hostname === 'imagery.nationalmap.gov') {
     // Map pieces (tiles, fonts, icons) never change: keep them. The small style files refresh when there is signal.
-    const keep = /\.(pbf|png)$/.test(url.pathname) || url.pathname.startsWith('/fonts/') || url.pathname.startsWith('/sprites/');
+    const keep = url.hostname === 'imagery.nationalmap.gov' || /\.(pbf|png)$/.test(url.pathname) || url.pathname.startsWith('/fonts/') || url.pathname.startsWith('/sprites/');
     e.respondWith(caches.open(TILES).then(async (c) => {
       const hit = await c.match(req);
       if (hit && keep) return hit;
