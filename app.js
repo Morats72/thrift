@@ -1,7 +1,7 @@
 /* Good Finds - the app. Pins live on the phone; the Google Sheet is the shared copy. */
 (() => {
   // Bump this on every deploy, and bump SHELL in sw.js to match so phones pick up the new files.
-  const APP_VERSION = 'v1.4', APP_DATE = 'Oct 6 2026';
+  const APP_VERSION = 'v1.5', APP_DATE = 'Oct 7 2026';
   const { CATS, parseGoogleCsv, toCsv, solveOrder, googleLinks, appleLinks } = window.GF;
   const CAT = Object.fromEntries(CATS.map((c) => [c.id, c]));
   const $ = (s) => document.querySelector(s);
@@ -85,7 +85,33 @@
   map.on('click', () => { if (!placing && ['detail', 'found'].includes($('#sheet').dataset.mode)) closeSheet(); });
   map.on('contextmenu', (e) => { if (!placing) openForm(blank(e.latlng.lat, e.latlng.lng), true); }); // long-press
 
-  const live = () => Object.values(places).filter((p) => !p.deleted);
+  /* ---------- rummage sales: dates, hours, and dropping off when they are over ---------- */
+  const isDay = (d) => /^\d{4}-\d{2}-\d{2}$/.test(d || '');
+  const lastDay = (p) => (isDay(p.ends) && p.ends > p.date ? p.ends : p.date);
+  const hoursOf = (p) => { const m = /^(\d{2}:\d{2})?-(\d{2}:\d{2})?$/.exec(p.hours || ''); return { open: (m && m[1]) || '', close: (m && m[2]) || '' }; };
+  const at = (day, hm) => { const [y, mo, d] = day.split('-').map(Number), [h, mi] = (hm || '0:0').split(':').map(Number); return new Date(y, mo - 1, d, h, mi).getTime(); };
+  const isSale = (p) => p.category === 'rummage' && isDay(p.date);
+  // The moment a sale is over: closing time on its last day, or the end of that day if no closing time was given.
+  const saleEnd = (p) => (isSale(p) ? (hoursOf(p).close ? at(lastDay(p), hoursOf(p).close) : at(lastDay(p), '23:59') + 60000) : null);
+  const expired = (p) => { const e = saleEnd(p); return e != null && Date.now() >= e; };
+  const gone = (p) => !!p.deleted || expired(p);
+  const live = () => Object.values(places).filter((p) => !gone(p));
+  const past = () => Object.values(places).filter((p) => !p.deleted && expired(p));
+  const fmtTime = (hm) => { const [h, m] = hm.split(':').map(Number); return (h % 12 || 12) + (m ? ':' + String(m).padStart(2, '0') : '') + (h < 12 ? ' AM' : ' PM'); };
+  const dayShort = (d) => { const [y, mo, dd] = d.split('-').map(Number); return new Date(y, mo - 1, dd).toLocaleDateString(undefined, Object.assign({ weekday: 'short', month: 'short', day: 'numeric' }, y === new Date().getFullYear() ? {} : { year: 'numeric' })); };
+  function saleWhen(p) {
+    const h = hoursOf(p), end = lastDay(p);
+    return dayShort(p.date) + (end > p.date ? ' to ' + dayShort(end) : '') +
+      (h.open && h.close ? ', ' + fmtTime(h.open) + ' to ' + fmtTime(h.close) : h.open ? ', opens ' + fmtTime(h.open) : h.close ? ', until ' + fmtTime(h.close) : '');
+  }
+  function saleStatus(p) {
+    if (expired(p)) return 'over';
+    const now = Date.now(), t = today(), h = hoursOf(p), end = lastDay(p);
+    if (t < p.date) { const n = dayNum(p.date) - dayNum(t); return n === 1 ? 'tomorrow' : 'in ' + n + ' days'; }
+    if (h.open && now < at(t, h.open)) return 'today, opens ' + fmtTime(h.open);
+    if (h.close && now >= at(t, h.close)) return t < end ? 'closed for today, back tomorrow' : 'over';
+    return 'on now' + (h.close ? ', until ' + fmtTime(h.close) : '') + (t < end ? '' : ', last day');
+  }
   const fits = (p) => filter === 'all' || (filter === 'new' ? isNew(p) : p.category === filter);
   const shown = () => live().filter(fits);
   const filterLabel = () => (filter === 'new' ? 'New spots' : CAT[filter] ? CAT[filter].label : 'All spots');
@@ -161,10 +187,10 @@
 
   /* ---------- sync with the Google Sheet ---------- */
   const wire = (p) => ({ id: p.id, name: p.name, lat: p.lat, lng: p.lng, category: p.category, note: p.note || '', rating: p.rating || '',
-    date: p.date || '', addedBy: p.addedBy || '', updated: p.updated, deleted: p.deleted ? '1' : '', visits: p.visits || '', city: p.city || '' });
+    date: p.date || '', addedBy: p.addedBy || '', updated: p.updated, deleted: p.deleted ? '1' : '', visits: p.visits || '', city: p.city || '', ends: p.ends || '', hours: p.hours || '' });
   const unwire = (s) => ({ id: String(s.id), name: String(s.name || ''), lat: Number(s.lat), lng: Number(s.lng), category: String(s.category || 'other'),
     note: String(s.note || ''), rating: Number(s.rating) || 0, date: String(s.date || ''), addedBy: String(s.addedBy || ''),
-    updated: Number(s.updated) || 0, deleted: ['1', 'true', 'TRUE'].includes(String(s.deleted)), visits: String(s.visits || ''), city: String(s.city || '') });
+    updated: Number(s.updated) || 0, deleted: ['1', 'true', 'TRUE'].includes(String(s.deleted)), visits: String(s.visits || ''), city: String(s.city || ''), ends: String(s.ends || ''), hours: String(s.hours || '') });
 
   async function sync(loud) {
     if (!api || syncing) return;
@@ -172,6 +198,7 @@
     syncing = true; renderStatus();
     const sent = Object.values(places).filter((p) => p._dirty).map(wire);
     const first = !live().length;
+    const openWas = selected && places[selected] ? JSON.stringify(wire(places[selected])) : '';
     try {
       const res = await fetch(api, { method: 'POST', body: JSON.stringify({ action: 'sync', changes: sent }) });
       const j = await res.json();
@@ -186,6 +213,7 @@
         // An older sheet script has no visits column: hold visit stamps on this phone until it is updated.
         const mine = places[p.id];
         if (mine && !has('visits') && mine.visits) { p.visits = mine.visits; p._dirty = true; held++; }
+        if (mine) for (const k of ['ends', 'hours']) if (!has(k) && mine[k]) { p[k] = mine[k]; p._dirty = true; }
         // Town names are looked up on the phone. Keep ours if the sheet has none for this exact pin, and share it if the sheet can hold it.
         if (mine && mine.city && !p.city && mine.lat === p.lat && mine.lng === p.lng) { p.city = mine.city; if (has('city')) { p._dirty = true; pushTowns++; } }
         next[p.id] = p;
@@ -200,7 +228,10 @@
       syncing = false; render();
       if (first && !view) fitAll();
       const mode = $('#sheet').dataset.mode;
-      if (mode === 'detail' && selected) { places[selected] && !places[selected].deleted ? openDetail(selected, true) : closeSheet(); }
+      if (mode === 'detail' && selected) {
+        if (!places[selected] || places[selected].deleted) closeSheet();
+        else if (!$('#sheet .arm') && JSON.stringify(wire(places[selected])) !== openWas) openDetail(selected, true); // only redraw if this spot actually changed
+      }
       if (arrived.length) {
         const who = [...new Set(arrived.map((p) => p.addedBy).filter(Boolean))].join(' and ') || 'Someone';
         toast(`${who} added ${arrived.length === 1 ? '“' + arrived[0].name + '”' : arrived.length + ' new spots'}. Tap the red New chip to see.`, 5500);
@@ -266,6 +297,8 @@
   function refreshOpen() {
     const m = $('#sheet').dataset.mode;
     if (!$('#sheet').classList.contains('open')) return;
+    // Never redraw under someone's finger: not while they are typing in the panel, and not between the two taps of a delete.
+    if ($('#sheet .arm') || $('#sheet').contains(document.activeElement) && /INPUT|TEXTAREA/.test(document.activeElement.tagName)) return;
     if (m === 'list' || (m === 'route' && !route.plan)) { const y = $('#sheet').scrollTop; reopenList(); $('#sheet').scrollTop = y; }
     else if (m === 'route') { const y = $('#sheet').scrollTop; openPlan(); $('#sheet').scrollTop = y; }
     else if (m === 'detail' && selected && places[selected]) openDetail(selected, true);
@@ -314,7 +347,8 @@
       <p class="meta"><span class="badge" style="--c:${c.color}">${c.icon} ${esc(c.label)}</span>
         ${myLoc ? ' &nbsp;' + fmtMi(distMi(myLoc, p)) + ' away' : ''}${n ? ' &nbsp;Stop ' + n + ' on the route' : ''}</p>
       ${p.rating ? `<div class="stars">${stars(p.rating)}</div>` : ''}
-      ${p.date ? `<p class="meta">📅 ${esc(niceDate(p.date))}</p>` : ''}
+      ${isSale(p) ? `<p class="meta when">📅 ${esc(saleWhen(p))} <b class="st ${expired(p) ? 'over' : ''}">${esc(saleStatus(p))}</b></p>` : p.date ? `<p class="meta">📅 ${esc(niceDate(p.date))}</p>` : ''}
+      ${expired(p) ? '<div class="note">This sale is over, so it is off the map and out of the lists. Edit the dates to bring it back, or delete it.</div>' : ''}
       <p class="meta" id="d-visit">🕘 ${visitLine(p)}</p>
       ${p.note ? `<div class="note">${esc(p.note)}</div>` : ''}
       ${p.addedBy ? `<p class="meta">${fresh ? '<u class="newtag">NEW</u> ' : ''}Flagged by ${esc(p.addedBy)}</p>` : fresh ? '<p class="meta"><u class="newtag">NEW</u></p>' : ''}
@@ -337,7 +371,7 @@
   }
 
   const blank = (lat, lng) => ({ id: 'p_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6), name: '', lat: +lat.toFixed(6), lng: +lng.toFixed(6),
-    category: CAT[filter] ? filter : 'thrift', note: '', rating: 0, date: '', visits: '', city: '', addedBy: me });
+    category: CAT[filter] ? filter : 'thrift', note: '', rating: 0, date: '', ends: '', hours: '', visits: '', city: '', addedBy: me });
 
   let draft = null, draftNew = false;
   const visitChips = () => visitsOf(draft).reverse().map((d) => `<button type="button" class="vchip" data-unvisit="${d}">${esc(niceDate(d))} ×</button>`).join('') || '<span class="hint">None yet.</span>';
@@ -351,7 +385,13 @@
       <div class="cats">${CATS.map((c) => `<button type="button" data-cat="${c.id}" class="${draft.category === c.id ? 'on' : ''}">${c.icon} ${esc(c.label)}</button>`).join('')}</div>
       <label>Worth the stop?</label>
       <div class="stars" id="f-stars">${[1, 2, 3, 4, 5].map((n) => `<button type="button" data-star="${n}" class="${n <= draft.rating ? 'on' : ''}">★</button>`).join('')}</div>
-      <label for="f-date">Date (optional, handy for rummage sales)</label><input id="f-date" type="date" value="${esc(draft.date)}">
+      <label for="f-date" id="f-date-l">${draft.category === 'rummage' ? 'First day of the sale' : 'Date (optional)'}</label><input id="f-date" type="date" value="${esc(draft.date)}">
+      <div id="f-sale" ${draft.category === 'rummage' ? '' : 'hidden'}>
+        <label for="f-ends">Last day (leave blank for a one-day sale)</label><input id="f-ends" type="date" value="${esc(draft.ends || '')}">
+        <div class="row" style="margin-top:0"><div style="flex:1"><label for="f-open">Opens</label><input id="f-open" type="time" value="${hoursOf(draft).open}"></div>
+          <div style="flex:1"><label for="f-close">Closes</label><input id="f-close" type="time" value="${hoursOf(draft).close}"></div></div>
+        <p class="hint">Once the sale is over it drops off the map by itself. Nothing is deleted: it waits under Settings, Past sales.</p>
+      </div>
       <label for="f-note">Notes</label><textarea id="f-note" placeholder="Good tool section, cash only, closed Mondays…">${esc(draft.note)}</textarea>
       <label for="f-visit">Stops we have made here</label>
       <div id="f-visits" class="vchips">${visitChips()}</div>
@@ -360,6 +400,7 @@
   }
   function readForm() {
     draft.name = $('#f-name').value.trim(); draft.city = $('#f-city').value.trim(); draft.date = $('#f-date').value; draft.note = $('#f-note').value.trim();
+    draft.ends = $('#f-ends').value; { const o = $('#f-open').value, c = $('#f-close').value; draft.hours = o || c ? o + '-' + c : ''; }
   }
 
   function sortedList(list, from) {
@@ -371,7 +412,7 @@
     return list;
   }
   const subline = (p, from) => { const c = catOf(p), lv = lastVisit(p);
-    return townTag(p) + esc(c.label) + (p.rating ? ' · ' + stars(p.rating) : '') + (from ? ' · ' + fmtMi(p._d) : '') + (lv ? ' · last stop ' + ago(lv) : ''); };
+    return townTag(p) + esc(c.label) + (isSale(p) ? ' · 📅 ' + esc(saleWhen(p)) + ' (' + esc(saleStatus(p)) + ')' : '') + (p.rating ? ' · ' + stars(p.rating) : '') + (from ? ' · ' + fmtMi(p._d) : '') + (lv ? ' · last stop ' + ago(lv) : ''); };
   const sortChips = () => `<div class="seg">${[['near', 'Nearest'], ['name', 'A to Z'], ['stale', 'Longest since a stop']].map(([k, t]) => `<button data-sort="${k}" class="${listSort === k ? 'on' : ''}">${t}</button>`).join('')}</div>`;
 
   function openList(q) {
@@ -486,7 +527,7 @@
   const OSRM = 'https://router.project-osrm.org/';
   const lnglat = (pts) => pts.map((p) => (+p.lng).toFixed(6) + ',' + (+p.lat).toFixed(6)).join(';');
   async function buildRoute() {
-    const stops = route.ids.map((id) => places[id]).filter((p) => p && !p.deleted);
+    const stops = route.ids.map((id) => places[id]).filter((p) => p && !gone(p));
     if (!stops.length) return toast('Tick at least one stop.');
     if (stops.length > 25) return toast('That is ' + stops.length + ' stops. Keep it to 25 or fewer.');
     toast('Finding you…');
@@ -525,7 +566,7 @@
   }
 
   function openRoute() {
-    route.ids = route.ids.filter((id) => places[id] && !places[id].deleted);
+    route.ids = route.ids.filter((id) => places[id] && !gone(places[id]));
     if (route.plan) return openPlan();
     const list = sortedList(shown(), myLoc);
     openSheet('route', `
@@ -540,7 +581,7 @@
     $('#r-loop').addEventListener('change', (e) => { route.loop = e.target.checked; saveRoute(); });
   }
   function openPlan() {
-    const pl = route.plan, stops = pl.order.map((id) => places[id]).filter((p) => p && !p.deleted);
+    const pl = route.plan, stops = pl.order.map((id) => places[id]).filter((p) => p && !gone(p));
     const todo = stops.filter((p) => !route.done.includes(p.id)), next = todo[0];
     const backTo = pl.back ? pl.start : null;
     const g = googleLinks(todo, backTo), a = appleLinks(todo, backTo);
@@ -560,6 +601,24 @@
       <div class="row"><button class="btn" data-act="r-rebuild">Rebuild from here</button><button class="btn" data-act="r-edit">Change stops</button><button class="btn danger" data-act="r-clear">Clear route</button></div>`);
   }
 
+  function openPast() {
+    const list = past().sort((a, b) => saleEnd(b) - saleEnd(a));
+    openSheet('past', `
+      <h2>Past sales <small class="cnt">${list.length}</small></h2>
+      <p class="hint">Sales that are over. They are off the map but nothing is lost. Open one and edit the dates if it runs again, like a yearly church sale.</p>
+      ${list.map((p) => `<button class="item" data-open="${esc(p.id)}"><span class="dot" style="--c:${catOf(p).color};opacity:.55">${catOf(p).icon}</span>
+        <span class="t"><div>${esc(p.name)}</div><small>${townTag(p)}${esc(saleWhen(p))}</small></span></button>`).join('') || '<p class="hint">None.</p>'}
+      ${list.length ? '<div class="row"><button class="btn danger" data-act="past-clear">Delete all past sales</button></div>' : ''}`);
+  }
+
+  // Sales end while the app is open: check twice a minute and take them off the map when they do.
+  let pastN = past().length;
+  function tick() {
+    const n = past().length;
+    if (n !== pastN) { pastN = n; route.ids = route.ids.filter((id) => places[id] && !gone(places[id])); saveRoute(); render(); refreshOpen(); }
+  }
+  setInterval(tick, 30000);
+
   function openSettings(welcome) {
     const n = live().length, waiting = Object.values(places).filter((p) => p._dirty).length, last = LS.get('lastSync', 0);
     openSheet('settings', `
@@ -576,7 +635,7 @@
         ${api ? '<button class="btn" data-act="s-share">Send setup link</button>' : ''}</div>
       <label>Your ${n} spots</label>
       <div class="row" style="margin-top:0"><button class="btn" data-act="s-import">Import Google list</button><button class="btn" data-act="s-export">Export backup</button>
-        <button class="btn" data-act="s-fit">Show all</button></div>
+        <button class="btn" data-act="s-fit">Show all</button>${past().length ? `<button class="btn" data-act="s-past">Past sales (${past().length})</button>` : ''}</div>
       <input id="s-file" type="file" accept=".csv,text/csv" multiple hidden>
       <p class="hint">Import takes the CSV files from Google Takeout (Saved). Spots already on the map are skipped.</p>
       <p class="hint">Town names come from the US Census ZIP areas and the GeoNames postal table (CC BY 4.0).</p>
@@ -599,8 +658,8 @@
   }
 
   async function exportCsv() {
-    const rows = [['name', 'town', 'category', 'lat', 'lng', 'rating', 'date', 'last stop', 'all stops', 'note', 'addedBy']].concat(
-      live().sort((a, b) => a.name.localeCompare(b.name)).map((p) => [p.name, p.city || '', catOf(p).label, p.lat, p.lng, p.rating || '', p.date, lastVisit(p), visitsOf(p).join(' '), p.note, p.addedBy]));
+    const rows = [['name', 'town', 'category', 'lat', 'lng', 'rating', 'date', 'last day', 'hours', 'last stop', 'all stops', 'note', 'addedBy']].concat(
+      live().sort((a, b) => a.name.localeCompare(b.name)).map((p) => [p.name, p.city || '', catOf(p).label, p.lat, p.lng, p.rating || '', p.date, p.ends || '', p.hours || '', lastVisit(p), visitsOf(p).join(' '), p.note, p.addedBy]));
     const name = 'good-finds-' + new Date().toISOString().slice(0, 10) + '.csv';
     const file = new File([toCsv(rows)], name, { type: 'text/csv' });
     try { if (navigator.canShare && navigator.canShare({ files: [file] })) { await navigator.share({ files: [file] }); return; } } catch (e) { if (e.name === 'AbortError') return; }
@@ -631,7 +690,8 @@
     const d = el.dataset;
     if (d.filter) { filter = d.filter; render(); reopenList(); return; }
     if (d.sort) { listSort = d.sort; reopenList(); return; }
-    if (d.cat) { readForm(); draft.category = d.cat; document.querySelectorAll('[data-cat]').forEach((b) => b.classList.toggle('on', b === el)); return; }
+    if (d.cat) { readForm(); draft.category = d.cat; document.querySelectorAll('[data-cat]').forEach((b) => b.classList.toggle('on', b === el));
+      $('#f-sale').hidden = d.cat !== 'rummage'; $('#f-date-l').textContent = d.cat === 'rummage' ? 'First day of the sale' : 'Date (optional)'; return; }
     if (d.star) { const n = +d.star; draft.rating = draft.rating === n ? 0 : n; document.querySelectorAll('[data-star]').forEach((b) => b.classList.toggle('on', +b.dataset.star <= draft.rating)); return; }
     if (d.unvisit) { setVisit(draft, d.unvisit, false); $('#f-visits').innerHTML = visitChips(); return; }
     if (d.open) { const p = places[d.open]; if (p) { map.setView([p.lat, p.lng], Math.max(map.getZoom(), 15)); openDetail(p.id, true); } return; }
@@ -677,9 +737,11 @@
       case 'save':
         readForm();
         if (!draft.name) { toast('Give it a name first.'); $('#f-name').focus(); break; }
+        if (draft.category === 'rummage' && draft.ends && !draft.date) { toast('Set the first day of the sale too.'); break; }
+        if (draft.category === 'rummage' && draft.ends && draft.ends < draft.date) { toast('The last day is before the first day.'); break; }
         if (draftNew && !draft.addedBy) draft.addedBy = me;
         if (foundMarker) { map.removeLayer(foundMarker); foundMarker = null; found = null; }
-        commit(draft); openDetail(draft.id, !draftNew); toast(draftNew ? 'On the map.' : 'Saved.');
+        commit(draft); pastN = past().length; openDetail(draft.id, !draftNew); toast(expired(draft) ? 'Saved, but that sale is already over, so it went to Past sales.' : draftNew ? 'On the map.' : 'Saved.', expired(draft) ? 5000 : 0);
         break;
       case 'save-hit': if (found) { const b = blank(found.lat, found.lng); b.name = found.name; b.note = found.sub || ''; openForm(b, true); } break;
       case 'r-build': case 'r-rebuild':
@@ -702,6 +764,11 @@
       case 's-import': $('#s-file').click(); break;
       case 's-export': exportCsv(); break;
       case 's-fit': closeSheet(); fitAll(); break;
+      case 's-past': openPast(); break;
+      case 'past-clear':
+        if (!el.classList.contains('arm')) { el.classList.add('arm'); el.textContent = 'Tap again to delete them all'; break; }
+        { const list = past(), now = Date.now(); list.forEach((p) => { p.deleted = true; p.updated = now; p._dirty = true; }); pastN = 0; save(); render(); sync(); closeSheet(); toast('Deleted ' + list.length + ' past ' + (list.length === 1 ? 'sale' : 'sales') + '.'); }
+        break;
     }
   });
 
@@ -717,5 +784,5 @@
   document.addEventListener('visibilitychange', () => { if (!document.hidden) sync(); });
   setInterval(() => { if (!document.hidden) sync(); }, 60000);
   if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) navigator.serviceWorker.register('sw.js').catch(() => {});
-  window.GFapp = { version: APP_VERSION, sync, get places() { return places; }, get route() { return route; } }; // for troubleshooting from the console
+  window.GFapp = { version: APP_VERSION, tick, sync, get places() { return places; }, get route() { return route; } }; // for troubleshooting from the console
 })();

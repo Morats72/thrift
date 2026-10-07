@@ -1,6 +1,6 @@
 /* Good Finds - offline support. App files load from the phone first and refresh in the background.
    Map tiles you have already looked at are kept so the map still draws with no signal. */
-const SHELL = 'gf-shell-v1.4' /* match APP_VERSION in app.js */, TILES = 'gf-tiles-v1', MAX_TILES = 4000;
+const SHELL = 'gf-shell-v1.5' /* match APP_VERSION in app.js */, TILES = 'gf-tiles-v1', MAX_TILES = 4000;
 const FILES = ['./', 'index.html', 'app.js', 'lib.js', 'leaflet.js', 'leaflet.css', 'maplibre-gl.js', 'maplibre-gl.css', 'leaflet-maplibre-gl.js', 'manifest.json', 'icon-180.png', 'icon-192.png', 'icon-512.png'];
 
 self.addEventListener('install', (e) => { e.waitUntil(caches.open(SHELL).then((c) => c.addAll(FILES)).then(() => self.skipWaiting())); });
