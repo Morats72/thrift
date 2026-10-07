@@ -1,5 +1,7 @@
 /* Good Finds - the app. Pins live on the phone; the Google Sheet is the shared copy. */
 (() => {
+  // Bump this on every deploy, and bump SHELL in sw.js to match so phones pick up the new files.
+  const APP_VERSION = 'v1.2', APP_DATE = 'Oct 6 2026';
   const { CATS, parseGoogleCsv, toCsv, solveOrder, googleLinks, appleLinks } = window.GF;
   const CAT = Object.fromEntries(CATS.map((c) => [c.id, c]));
   const $ = (s) => document.querySelector(s);
@@ -162,7 +164,7 @@
       const j = await res.json();
       if (!j.ok || !Array.isArray(j.places)) throw new Error(j.error || 'Unexpected reply');
       const sentAt = Object.fromEntries(sent.map((p) => [p.id, p.updated]));
-      const knowsVisits = Number(j.v) >= 2;
+      const knowsVisits = Number(j.v) >= 2; LS.set('scriptV', Number(j.v) || 1);
       const next = {}; let held = 0;
       for (const s of j.places) {
         const p = unwire(s); if (!p.id || !isFinite(p.lat) || !isFinite(p.lng)) continue;
@@ -493,7 +495,7 @@
         <button class="btn" data-act="s-fit">Show all</button></div>
       <input id="s-file" type="file" accept=".csv,text/csv" multiple hidden>
       <p class="hint">Import takes the CSV files from Google Takeout (Saved). Spots already on the map are skipped.</p>
-      <p class="hint">Good Finds version 3.</p>`);
+      <p class="hint">Good Finds ${APP_VERSION} — ${APP_DATE}${api ? ' · sheet script v' + LS.get('scriptV', '?') : ''}</p>`);
     $('#s-file').addEventListener('change', importFiles);
   }
 
@@ -617,6 +619,7 @@
   });
 
   /* ---------- go ---------- */
+  $('#ver').textContent = APP_VERSION;
   render(); drawRoute();
   if (!view && live().length) fitAll();
   if (!me) openSettings(true);
@@ -626,5 +629,5 @@
   document.addEventListener('visibilitychange', () => { if (!document.hidden) sync(); });
   setInterval(() => { if (!document.hidden) sync(); }, 60000);
   if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) navigator.serviceWorker.register('sw.js').catch(() => {});
-  window.GFapp = { sync, get places() { return places; }, get route() { return route; } }; // for troubleshooting from the console
+  window.GFapp = { version: APP_VERSION, sync, get places() { return places; }, get route() { return route; } }; // for troubleshooting from the console
 })();
