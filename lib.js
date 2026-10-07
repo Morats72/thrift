@@ -6,6 +6,7 @@
     { id: 'antique', label: 'Antique', icon: '🕰️', color: '#7a5a2b' },
     { id: 'consignment', label: 'Consignment', icon: '🏷️', color: '#7b4a86' },
     { id: 'rummage', label: 'Rummage sale', icon: '🪧', color: '#c98a12' },
+    { id: 'coffee', label: 'Coffee', icon: '☕', color: '#5b3a29' },
     { id: 'food', label: 'Food', icon: '🍔', color: '#b23a48' },
     { id: 'stay', label: 'Stayed here', icon: '🏠', color: '#1f7a8c' },
     { id: 'other', label: 'Other', icon: '📍', color: '#47607a' }
@@ -44,7 +45,8 @@
 
   function guessCat(name) {
     const n = String(name || '').toLowerCase();
-    if (/subway|coffee|cafe|café|diner|grill|bbq|restaurant|pizza|bakery|burger|tavern|brewery/.test(n)) return 'food';
+    if (/coffee|espresso|roaster|\bjava\b/.test(n)) return 'coffee';
+    if (/subway|cafe|café|diner|grill|bbq|restaurant|pizza|bakery|burger|tavern|brewery/.test(n)) return 'food';
     if (/airbnb|vrbo|\bcabins?\b|hotel|motel|\binn\b|\blodge\b|campground|\bresort\b/.test(n)) return 'stay';
     if (/rummage|yard sale|garage sale|estate sale/.test(n)) return 'rummage';
     if (/flea|trading post|swap meet/.test(n)) return 'flea';

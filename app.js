@@ -1,7 +1,7 @@
 /* Good Finds - the app. Pins live on the phone; the Google Sheet is the shared copy. */
 (() => {
   // Bump this on every deploy, and bump SHELL in sw.js to match so phones pick up the new files.
-  const APP_VERSION = 'v1.3', APP_DATE = 'Oct 6 2026';
+  const APP_VERSION = 'v1.4', APP_DATE = 'Oct 6 2026';
   const { CATS, parseGoogleCsv, toCsv, solveOrder, googleLinks, appleLinks } = window.GF;
   const CAT = Object.fromEntries(CATS.map((c) => [c.id, c]));
   const $ = (s) => document.querySelector(s);
